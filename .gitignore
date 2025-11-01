@@ -1,0 +1,5 @@
+/Debug/
+/Drivers/
+/Core/Startup
+*.launch
+*.id
