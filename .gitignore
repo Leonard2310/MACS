@@ -3,3 +3,10 @@
 /Core/Startup
 *.launch
 *.id
+.cproject
+.mxproject
+.project
+.settings/language.settings.xml
+.settings/org.eclipse.core.resources.prefs
+.settings/stm32cubeide.project.prefs
+STM32F303VCTX_FLASH.ld
