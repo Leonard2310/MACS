@@ -66,6 +66,13 @@ void Error_Handler(void);
 #define Blue_LED_GPIO_Port GPIOE
 #define Red_LED_Pin GPIO_PIN_9
 #define Red_LED_GPIO_Port GPIOE
+#define PWM_Servo2_Pin GPIO_PIN_10
+#define PWM_Servo2_GPIO_Port GPIOB
+#define PIR3_LED2_Pin GPIO_PIN_11
+#define PIR3_LED2_GPIO_Port GPIOB
+#define PIR4_signal_Pin GPIO_PIN_15
+#define PIR4_signal_GPIO_Port GPIOB
+#define PIR4_signal_EXTI_IRQn EXTI15_10_IRQn
 #define PIR3_LED_Pin GPIO_PIN_3
 #define PIR3_LED_GPIO_Port GPIOB
 #define PIR_Signal_Pin GPIO_PIN_4

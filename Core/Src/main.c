@@ -44,6 +44,7 @@ extern TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t secondPIR_triggered = 0;
+volatile uint8_t pir4_show_message = 0;  // Flag per PIR4
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -79,11 +80,18 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 
     // PIR3 - COMPLETAMENTE INDIPENDENTE
     // Solo accende LED e avvia timer, nient'altro!
-    if (GPIO_Pin == GPIO_PIN_9)
+    else if (GPIO_Pin == GPIO_PIN_9)
     {
         HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_SET);
+        HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_SET);
         __HAL_TIM_SET_COUNTER(&htim4, 0);
         HAL_TIM_Base_Start_IT(&htim4);
+    }
+
+    // PIR4 - Nuovo sensore su PB15
+    else if (GPIO_Pin == GPIO_PIN_15)
+    {
+        pir4_show_message = 1;
     }
 }
 
@@ -93,6 +101,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     if (htim->Instance == TIM4)
     {
         HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_RESET);
+        HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_RESET);
         HAL_TIM_Base_Stop_IT(&htim4);
     }
 }
@@ -105,18 +114,22 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
   */
 int main(void)
 {
+
   /* USER CODE BEGIN 1 */
   uint8_t confirmed = 0;
   char buffer[32];
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
   HAL_Init();
 
   /* USER CODE BEGIN Init */
 
   /* USER CODE END Init */
 
+  /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
@@ -129,7 +142,6 @@ int main(void)
   MX_I2C1_Init();
   MX_TIM2_Init();
   MX_TIM4_Init();
-
   /* USER CODE BEGIN 2 */
   ssd1306_Init();
   ssd1306_Fill(Black);
@@ -143,6 +155,7 @@ int main(void)
   HAL_GPIO_WritePin(GPIOE, Red_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_RESET);
 
   /* USER CODE END 2 */
 
@@ -150,6 +163,28 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+      // === GESTIONE PIR4: Mostra messaggio quando rileva movimento ===
+      if (pir4_show_message)
+      {
+          ssd1306_Fill(Black);
+          ssd1306_SetCursor(5, 15);
+          ssd1306_WriteString("MOVIMENTO", Font_11x18, White);
+          ssd1306_SetCursor(5, 40);
+          ssd1306_WriteString("PIR4 RILEVATO", Font_7x10, White);
+          ssd1306_UpdateScreen();
+
+          HAL_Delay(3000);  // Mostra per 3 secondi
+
+          pir4_show_message = 0;
+
+          // Ripristina schermata base
+          ssd1306_Fill(Black);
+          ssd1306_SetCursor(10, 10);
+          ssd1306_WriteString("Sistema PIR", Font_11x18, White);
+          ssd1306_SetCursor(10, 40);
+          ssd1306_WriteString("In attesa...", Font_7x10, White);
+          ssd1306_UpdateScreen();
+      }
 
       // === GESTIONE PRIMO PIR ===
       GPIO_PinState pirState = HAL_GPIO_ReadPin(PIR_Signal_GPIO_Port, PIR_Signal_Pin);
@@ -321,6 +356,9 @@ void SystemClock_Config(void)
   RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -330,6 +368,8 @@ void SystemClock_Config(void)
     Error_Handler();
   }
 
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
@@ -359,14 +399,28 @@ void SystemClock_Config(void)
   */
 void Error_Handler(void)
 {
+  /* USER CODE BEGIN Error_Handler_Debug */
+  /* User can add his own implementation to report the HAL error return state */
   __disable_irq();
   while (1)
   {
   }
+  /* USER CODE END Error_Handler_Debug */
 }
 
 #ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
