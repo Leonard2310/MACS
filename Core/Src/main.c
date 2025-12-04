@@ -57,17 +57,23 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 #define COUNTDOWN_TIME 10
 
-void Servo_SetAngle(uint8_t angle)
+// Nel tuo main.c
+
+// Mappa l'angolo (0-180) in larghezza di impulso (500-2400 us per SG90 cinesi)
+// Se sbatte ancora, prova valori più conservativi come 600-2300
+void Servo_SetAngle(TIM_HandleTypeDef *htim, uint32_t channel, uint8_t angle)
 {
-    uint16_t pulse = 1000 + ((angle * 1000) / 180);
-    __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, pulse);
+    if (angle > 180) angle = 180; // Sicurezza
+
+    // Mappiamo 0-180 gradi su 500-2500 impulsi
+    // Formula: pulse = 500 + (angle * (2000 / 180))
+    // Usiamo numeri interi grandi per non perdere precisione
+    uint32_t pulse = 500 + (angle * 2000 / 180);
+
+    __HAL_TIM_SET_COMPARE(htim, channel, pulse);
 }
 
-void Servo2_SetAngle(uint8_t angle)
-{
-    uint16_t pulse = 1000 + ((angle * 1000) / 180);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, pulse);
-}
+
 
 // Callback per interrupt EXTI
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -156,6 +162,13 @@ int main(void)
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_RESET);
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
+  Servo_SetAngle(&htim3, TIM_CHANNEL_3, 0);
+  HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_3);
+
+  HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
+  Servo_SetAngle(&htim2, TIM_CHANNEL_3, 0);
+  HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
 
   /* USER CODE END 2 */
 
@@ -163,28 +176,7 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      // === GESTIONE PIR4: Mostra messaggio quando rileva movimento ===
-      if (pir4_show_message)
-      {
-          ssd1306_Fill(Black);
-          ssd1306_SetCursor(5, 15);
-          ssd1306_WriteString("MOVIMENTO", Font_11x18, White);
-          ssd1306_SetCursor(5, 40);
-          ssd1306_WriteString("PIR4 RILEVATO", Font_7x10, White);
-          ssd1306_UpdateScreen();
 
-          HAL_Delay(3000);  // Mostra per 3 secondi
-
-          pir4_show_message = 0;
-
-          // Ripristina schermata base
-          ssd1306_Fill(Black);
-          ssd1306_SetCursor(10, 10);
-          ssd1306_WriteString("Sistema PIR", Font_11x18, White);
-          ssd1306_SetCursor(10, 40);
-          ssd1306_WriteString("In attesa...", Font_7x10, White);
-          ssd1306_UpdateScreen();
-      }
 
       // === GESTIONE PRIMO PIR ===
       GPIO_PinState pirState = HAL_GPIO_ReadPin(PIR_Signal_GPIO_Port, PIR_Signal_Pin);
@@ -239,17 +231,27 @@ int main(void)
 
               __HAL_TIM_SET_COMPARE(&htim3, TIM_CHANNEL_3, 1000);
               HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
-              HAL_Delay(500);
 
-              Servo_SetAngle(0);
-              HAL_Delay(2000);
-              Servo_SetAngle(90);
-              HAL_Delay(2000);
-              Servo_SetAngle(180);
-              HAL_Delay(2000);
+              // UNICO movimento fluido da 0 a 180
+              for (int angolo = 0; angolo <= 180; angolo += 2)
+              {
+                      Servo_SetAngle(&htim3, TIM_CHANNEL_3,angolo);
+                      HAL_Delay(15); // Aumentato leggermente per fluidità
+              }
 
-              Servo_SetAngle(0);
-              HAL_Delay(1000);
+                  // Pausa a cancello aperto
+               HAL_Delay(5000);
+
+                  // --- RITORNO (Chiusura) ---
+                  // UNICO movimento fluido da 180 a 0
+               for (int angolo = 180; angolo >= 0; angolo -= 2)
+                  {
+                      Servo_SetAngle(&htim3, TIM_CHANNEL_3,angolo);
+                      HAL_Delay(15);
+                  }
+
+
+
               HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_3);
 
               ssd1306_Fill(Black);
@@ -290,17 +292,25 @@ int main(void)
 
               __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 1000);
               HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
-              HAL_Delay(500);
 
-              Servo2_SetAngle(0);
-              HAL_Delay(2000);
-              Servo2_SetAngle(90);
-              HAL_Delay(2000);
-              Servo2_SetAngle(180);
-              HAL_Delay(2000);
+               // UNICO movimento fluido da 0 a 180
+               for (int angolo = 0; angolo <= 180; angolo += 2)
+               {
+                       Servo_SetAngle(&htim2, TIM_CHANNEL_3,angolo);
+                       HAL_Delay(15); // Aumentato leggermente per fluidità
+               }
 
-              Servo2_SetAngle(0);
-              HAL_Delay(1000);
+                   // Pausa a cancello aperto
+                HAL_Delay(5000);
+
+                   // --- RITORNO (Chiusura) ---
+                   // UNICO movimento fluido da 180 a 0
+                for (int angolo = 180; angolo >= 0; angolo -= 2)
+                   {
+                       Servo_SetAngle(&htim2, TIM_CHANNEL_3, angolo);
+                       HAL_Delay(15);
+                   }
+
               HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
 
               ssd1306_Fill(Black);
