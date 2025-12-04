@@ -14,7 +14,6 @@
 #include "ssd1306.h"
 #include "ssd1306_fonts.h"
 #include <stdio.h>
-
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 extern TIM_HandleTypeDef htim2;
@@ -44,7 +43,7 @@ extern TIM_HandleTypeDef htim4;
 
 /* USER CODE BEGIN PV */
 volatile uint8_t secondPIR_triggered = 0;
-volatile uint8_t pir4_show_message = 0;  // Flag per PIR4
+volatile uint8_t pir4_servo_active = 0;  // Flag per gestire il servo del PIR4
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -57,23 +56,17 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN 0 */
 #define COUNTDOWN_TIME 10
 
-// Nel tuo main.c
-
-// Mappa l'angolo (0-180) in larghezza di impulso (500-2400 us per SG90 cinesi)
-// Se sbatte ancora, prova valori più conservativi come 600-2300
+// Mappa l'angolo (0-180) in larghezza di impulso (500-2400 us per SG90)
 void Servo_SetAngle(TIM_HandleTypeDef *htim, uint32_t channel, uint8_t angle)
 {
     if (angle > 180) angle = 180; // Sicurezza
 
     // Mappiamo 0-180 gradi su 500-2500 impulsi
     // Formula: pulse = 500 + (angle * (2000 / 180))
-    // Usiamo numeri interi grandi per non perdere precisione
     uint32_t pulse = 500 + (angle * 2000 / 180);
 
     __HAL_TIM_SET_COMPARE(htim, channel, pulse);
 }
-
-
 
 // Callback per interrupt EXTI
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
@@ -94,10 +87,10 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
         HAL_TIM_Base_Start_IT(&htim4);
     }
 
-    // PIR4 - Nuovo sensore su PB15
+    // PIR4 - COMPLETAMENTE INDIPENDENTE - Attiva il servo 3
     else if (GPIO_Pin == GPIO_PIN_15)
     {
-        pir4_show_message = 1;
+        pir4_servo_active = 1;  // Attiva il movimento del servo
     }
 }
 
@@ -109,6 +102,38 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_RESET);
         HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_RESET);
         HAL_TIM_Base_Stop_IT(&htim4);
+    }
+}
+
+// Gestione completamente indipendente del PIR4 e Servo 3
+void PIR4_Servo3_Handler(void)
+{
+    if (pir4_servo_active)
+    {
+        pir4_servo_active = 0;  // Reset flag
+
+        // Avvia PWM
+        HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+
+        // Apertura: 0 → 180 gradi
+        for (int angolo = 0; angolo <= 180; angolo += 2)
+        {
+            Servo_SetAngle(&htim3, TIM_CHANNEL_4, angolo);
+            HAL_Delay(15);
+        }
+
+        // Pausa a cancello aperto
+        HAL_Delay(5000);
+
+        // Chiusura: 180 → 0 gradi
+        for (int angolo = 180; angolo >= 0; angolo -= 2)
+        {
+            Servo_SetAngle(&htim3, TIM_CHANNEL_4, angolo);
+            HAL_Delay(15);
+        }
+
+        // Ferma PWM
+        HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
     }
 }
 
@@ -162,13 +187,21 @@ int main(void)
   HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(PIR3_LED_GPIO_Port, PIR3_LED_Pin, GPIO_PIN_RESET);
   HAL_GPIO_WritePin(PIR3_LED2_GPIO_Port, PIR3_LED2_Pin, GPIO_PIN_RESET);
+
+  // Inizializza Servo 1 (TIM3 CH3)
   HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_3);
   Servo_SetAngle(&htim3, TIM_CHANNEL_3, 0);
   HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_3);
 
+  // Inizializza Servo 2 (TIM2 CH3)
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
   Servo_SetAngle(&htim2, TIM_CHANNEL_3, 0);
   HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
+
+  // Inizializza Servo 3 (TIM3 CH4) - PIR4
+  HAL_TIM_PWM_Start(&htim3, TIM_CHANNEL_4);
+  Servo_SetAngle(&htim3, TIM_CHANNEL_4, 0);
+  HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_4);
 
   /* USER CODE END 2 */
 
@@ -236,21 +269,19 @@ int main(void)
               for (int angolo = 0; angolo <= 180; angolo += 2)
               {
                       Servo_SetAngle(&htim3, TIM_CHANNEL_3,angolo);
-                      HAL_Delay(15); // Aumentato leggermente per fluidità
+                      HAL_Delay(15);
               }
 
-                  // Pausa a cancello aperto
-               HAL_Delay(5000);
+              // Pausa a cancello aperto
+              HAL_Delay(5000);
 
-                  // --- RITORNO (Chiusura) ---
-                  // UNICO movimento fluido da 180 a 0
-               for (int angolo = 180; angolo >= 0; angolo -= 2)
-                  {
+              // --- RITORNO (Chiusura) ---
+              // UNICO movimento fluido da 180 a 0
+              for (int angolo = 180; angolo >= 0; angolo -= 2)
+              {
                       Servo_SetAngle(&htim3, TIM_CHANNEL_3,angolo);
                       HAL_Delay(15);
-                  }
-
-
+              }
 
               HAL_TIM_PWM_Stop(&htim3, TIM_CHANNEL_3);
 
@@ -293,23 +324,23 @@ int main(void)
               __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_3, 1000);
               HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_3);
 
-               // UNICO movimento fluido da 0 a 180
-               for (int angolo = 0; angolo <= 180; angolo += 2)
-               {
-                       Servo_SetAngle(&htim2, TIM_CHANNEL_3,angolo);
-                       HAL_Delay(15); // Aumentato leggermente per fluidità
-               }
+              // UNICO movimento fluido da 0 a 180
+              for (int angolo = 0; angolo <= 180; angolo += 2)
+              {
+                      Servo_SetAngle(&htim2, TIM_CHANNEL_3,angolo);
+                      HAL_Delay(15);
+              }
 
-                   // Pausa a cancello aperto
-                HAL_Delay(5000);
+              // Pausa a cancello aperto
+              HAL_Delay(5000);
 
-                   // --- RITORNO (Chiusura) ---
-                   // UNICO movimento fluido da 180 a 0
-                for (int angolo = 180; angolo >= 0; angolo -= 2)
-                   {
-                       Servo_SetAngle(&htim2, TIM_CHANNEL_3, angolo);
-                       HAL_Delay(15);
-                   }
+              // --- RITORNO (Chiusura) ---
+              // UNICO movimento fluido da 180 a 0
+              for (int angolo = 180; angolo >= 0; angolo -= 2)
+              {
+                      Servo_SetAngle(&htim2, TIM_CHANNEL_3, angolo);
+                      HAL_Delay(15);
+              }
 
               HAL_TIM_PWM_Stop(&htim2, TIM_CHANNEL_3);
 
@@ -347,6 +378,9 @@ int main(void)
           HAL_GPIO_WritePin(GPIOE, Red_LED_Pin, GPIO_PIN_RESET);
           HAL_GPIO_WritePin(GREEN_LED_GPIO_Port, GREEN_LED_Pin, GPIO_PIN_RESET);
       }
+
+      // Gestione completamente indipendente PIR4 + Servo 3
+      PIR4_Servo3_Handler();
 
       HAL_Delay(100);
     /* USER CODE END WHILE */
