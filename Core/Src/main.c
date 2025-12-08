@@ -28,9 +28,10 @@
  *                   - Automatic ticket sales blocking when museum is full
  *                   - Smooth servo motor movements for gates
  *                   - Independent ambient lighting system
+ *                   - Exit gate controlled entirely by TIM6 interrupt (15ms period)
  *
  * @authors        : Leonardo Catello, Salvatore Maione, Luisa Ciniglio, Roberta Granata
- * @version        : 1.1
+ * @version        : 1.2 - Fixed TIM6 timing for exit gate
  ******************************************************************************
  */
 /* USER CODE END Header */
@@ -50,7 +51,7 @@
  * htim2: PWM timer for Servo2 (entry gate) on PB10, Channel 3
  * htim3: PWM timer for Servo1 (ticket turnstile) on PB0, Channel 3
  * htim4: Base timer for PIR3 LED auto-off timeout (2 seconds)
- * htim6: Base timer for Servo3 movement control (non-blocking) */
+ * htim6: Base timer for Servo3 movement control (15ms period) - NON-BLOCKING */
 extern TIM_HandleTypeDef htim1;
 extern TIM_HandleTypeDef htim2;
 extern TIM_HandleTypeDef htim4;
@@ -96,7 +97,7 @@ extern TIM_HandleTypeDef htim6;
 volatile uint8_t secondPIR_triggered = 0;
 
 /**
- * @brief State machine for exit gate operation (controlled by TIM6 interrupt)
+ * @brief State machine for exit gate operation (controlled by TIM6 interrupt every 15ms)
  */
 typedef enum {
     EXIT_GATE_IDLE = 0,
@@ -210,8 +211,11 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 /**
  * @brief  Timer period elapsed callback
  * @param  htim: Pointer to the timer handle that triggered the callback
- * @note   TIM4: Used to turn off ambient lighting LEDs after timeout
+ * @note   TIM4: Used to turn off ambient lighting LEDs after timeout (2s)
  *         TIM6: Used to control exit gate servo movement (15ms interrupts)
+ *               - Opening: 0° → 180° in steps of 2° (90 steps × 15ms = 1.35s)
+ *               - Wait: 333 interrupts × 15ms = 5 seconds
+ *               - Closing: 180° → 0° in steps of 2° (90 steps × 15ms = 1.35s)
  * @retval None
  */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
@@ -224,35 +228,41 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
         HAL_TIM_Base_Stop_IT(&htim4);
     }
 
-    /* TIM6 callback - Control exit gate servo movement (called every 15ms) */
+    /* TIM6 callback - Control exit gate servo movement (called every 15ms)
+     * TIM6 Configuration: Prescaler=119, Period=999
+     * Timer frequency: 8MHz / 120 = 66.67kHz
+     * Interrupt period: 1000 / 66.67kHz = 15ms */
     else if (htim->Instance == TIM6)
     {
         switch (exit_gate_state)
         {
             case EXIT_GATE_IDLE:
-                // Nothing to do
+                // Nothing to do - waiting for PIR4 trigger
                 break;
 
             case EXIT_GATE_OPENING:
+                // Gradually open gate: 0° → 180° in 2° steps
                 exit_gate_angle += 2;
                 if (exit_gate_angle >= 180)
                 {
                     exit_gate_angle = 180;
                     exit_gate_state = EXIT_GATE_OPEN;
-                    exit_gate_timer = 0;  // Reset counter (will count to ~333 = 5 seconds)
+                    exit_gate_timer = 0;  // Reset counter for 5 second wait
                 }
                 Servo_SetAngle(&htim1, TIM_CHANNEL_3, exit_gate_angle);
                 break;
 
             case EXIT_GATE_OPEN:
+                // Wait 5 seconds with gate fully open
                 exit_gate_timer++;
-                if (exit_gate_timer >= 333)  // 333 * 15ms ≈ 5 seconds
+                if (exit_gate_timer >= 333)  // 333 × 15ms = 4995ms ≈ 5 seconds
                 {
                     exit_gate_state = EXIT_GATE_CLOSING;
                 }
                 break;
 
             case EXIT_GATE_CLOSING:
+                // Gradually close gate: 180° → 0° in 2° steps
                 if (exit_gate_angle >= 2)
                 {
                     exit_gate_angle -= 2;
@@ -260,6 +270,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
                 }
                 else
                 {
+                    // Gate fully closed
                     exit_gate_angle = 0;
                     Servo_SetAngle(&htim1, TIM_CHANNEL_3, 0);
                     HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_3);
@@ -275,82 +286,6 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
                 }
                 break;
         }
-    }
-}
-
-/**
- * @brief  Handles exit gate operation triggered by PIR4 (non-blocking state machine)
- * @note   Operates Servo3 (TIM1_CH3N) on PB1 for visitor exit
- *         This function must be called frequently (every loop iteration)
- * @retval None
- */
-void PIR4_ExitGate_Handler(void)
-{
-    static uint32_t last_time = 0;
-    uint32_t current_time = HAL_GetTick();
-
-    switch (exit_gate_state)
-    {
-        case EXIT_GATE_IDLE:
-            // Nothing to do, waiting for PIR4 interrupt
-            break;
-
-        case EXIT_GATE_OPENING:
-            // Move servo gradually (non-blocking)
-            if (current_time - last_time >= 15)  // Update every 15ms
-            {
-                last_time = current_time;
-                exit_gate_angle += 2;
-
-                if (exit_gate_angle >= 180)
-                {
-                    exit_gate_angle = 180;
-                    exit_gate_state = EXIT_GATE_OPEN;
-                    exit_gate_timer = current_time;  // Start 5 second timer
-                }
-
-                Servo_SetAngle(&htim1, TIM_CHANNEL_3, exit_gate_angle);
-            }
-            break;
-
-        case EXIT_GATE_OPEN:
-            // Wait 5 seconds with gate open
-            if (current_time - exit_gate_timer >= 5000)
-            {
-                exit_gate_state = EXIT_GATE_CLOSING;
-                exit_gate_angle = 180;
-            }
-            break;
-
-        case EXIT_GATE_CLOSING:
-            // Move servo gradually back to 0° (non-blocking)
-            if (current_time - last_time >= 15)  // Update every 15ms
-            {
-                last_time = current_time;
-
-                if (exit_gate_angle >= 2)
-                {
-                    exit_gate_angle -= 2;
-                }
-                else
-                {
-                    exit_gate_angle = 0;
-                    Servo_SetAngle(&htim1, TIM_CHANNEL_3, 0);
-                    HAL_TIMEx_PWMN_Stop(&htim1, TIM_CHANNEL_3);
-
-                    // Decrement visitor counter
-                    if (visitor_count > 0)
-                    {
-                        visitor_count--;
-                    }
-
-                    exit_gate_state = EXIT_GATE_IDLE;
-                    break;
-                }
-
-                Servo_SetAngle(&htim1, TIM_CHANNEL_3, exit_gate_angle);
-            }
-            break;
     }
 }
 
@@ -415,13 +350,12 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_TIM1_Init();
   MX_TIM3_Init();
   MX_I2C1_Init();
   MX_TIM2_Init();
   MX_TIM4_Init();
+  MX_TIM1_Init();
   MX_TIM6_Init();
-
   /* USER CODE BEGIN 2 */
 
   /* ========== OLED Display Initialization ========== */
@@ -544,12 +478,8 @@ int main(void)
                       break;
                   }
 
-                  /* Wait 1 second but check PIR4 every 100ms */
-                  for (int i = 0; i < 10; i++)
-                  {
-                      PIR4_ExitGate_Handler();  // Allow exit gate to work during countdown
-                      HAL_Delay(100);
-                  }
+                  /* Wait 1 second - Exit gate works independently via TIM6 interrupt */
+                  HAL_Delay(1000);
               }
 
               if (confirmed)
@@ -581,22 +511,16 @@ int main(void)
                   for (int angolo = 0; angolo <= 180; angolo += 2)
                   {
                       Servo_SetAngle(&htim3, TIM_CHANNEL_3, angolo);
-                      PIR4_ExitGate_Handler();  // Allow exit during servo movement
                       HAL_Delay(15);
                   }
 
-                  /* Keep turnstile open for 5 seconds - check PIR4 every 100ms */
-                  for (int i = 0; i < 50; i++)
-                  {
-                      PIR4_ExitGate_Handler();
-                      HAL_Delay(100);
-                  }
+                  /* Keep turnstile open for 5 seconds */
+                  HAL_Delay(5000);
 
                   /* Smooth closing motion: 180° -> 0° */
                   for (int angolo = 180; angolo >= 0; angolo -= 2)
                   {
                       Servo_SetAngle(&htim3, TIM_CHANNEL_3, angolo);
-                      PIR4_ExitGate_Handler();  // Allow exit during servo movement
                       HAL_Delay(15);
                   }
 
@@ -617,7 +541,6 @@ int main(void)
                   secondPIR_triggered = 0;
                   while (!secondPIR_triggered)
                   {
-                      PIR4_ExitGate_Handler();  // Allow exit during wait
                       HAL_Delay(100);
                   }
 
@@ -653,22 +576,16 @@ int main(void)
                   for (int angolo = 0; angolo <= 180; angolo += 2)
                   {
                       Servo_SetAngle(&htim2, TIM_CHANNEL_3, angolo);
-                      PIR4_ExitGate_Handler();  // Allow exit during servo movement
                       HAL_Delay(15);
                   }
 
-                  /* Keep entry gate open for 5 seconds - check PIR4 every 100ms */
-                  for (int i = 0; i < 50; i++)
-                  {
-                      PIR4_ExitGate_Handler();
-                      HAL_Delay(100);
-                  }
+                  /* Keep entry gate open for 5 seconds */
+                  HAL_Delay(5000);
 
                   /* Smooth closing motion: 180° -> 0° */
                   for (int angolo = 180; angolo >= 0; angolo -= 2)
                   {
                       Servo_SetAngle(&htim2, TIM_CHANNEL_3, angolo);
-                      PIR4_ExitGate_Handler();  // Allow exit during servo movement
                       HAL_Delay(15);
                   }
 
@@ -724,8 +641,8 @@ int main(void)
        * EXIT GATE HANDLER - Fully independent via TIM6 interrupt
        * ================================================================
        * PIR4 triggers exit gate (Servo3) which is controlled entirely
-       * by TIM6 interrupt - no need to call any handler here
-       * Display update for visitor count happens automatically
+       * by TIM6 interrupt (every 15ms) - no manual handler needed
+       * Display update for visitor count happens automatically below
        * ================================================================ */
 
       /* Update display only when visitor count changes (after exit) */
@@ -746,11 +663,9 @@ int main(void)
 }
 
 /**
- * @brief  System Clock Configuration
- * @note   Configures HSI as system clock source at 8MHz
- *         No PLL is used in this configuration
- * @retval None
- */
+  * @brief System Clock Configuration
+  * @retval None
+  */
 void SystemClock_Config(void)
 {
   RCC_OscInitTypeDef RCC_OscInitStruct = {0};
@@ -758,8 +673,8 @@ void SystemClock_Config(void)
   RCC_PeriphCLKInitTypeDef PeriphClkInit = {0};
 
   /** Initializes the RCC Oscillators according to the specified parameters
-   * in the RCC_OscInitTypeDef structure.
-   */
+  * in the RCC_OscInitTypeDef structure.
+  */
   RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
   RCC_OscInitStruct.HSIState = RCC_HSI_ON;
   RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
@@ -770,7 +685,7 @@ void SystemClock_Config(void)
   }
 
   /** Initializes the CPU, AHB and APB buses clocks
-   */
+  */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
                               |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_HSI;
@@ -782,10 +697,9 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
-
-  /* Configure I2C1 clock source as HSI */
-  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1;
+  PeriphClkInit.PeriphClockSelection = RCC_PERIPHCLK_I2C1|RCC_PERIPHCLK_TIM1;
   PeriphClkInit.I2c1ClockSelection = RCC_I2C1CLKSOURCE_HSI;
+  PeriphClkInit.Tim1ClockSelection = RCC_TIM1CLK_HCLK;
   if (HAL_RCCEx_PeriphCLKConfig(&PeriphClkInit) != HAL_OK)
   {
     Error_Handler();
@@ -797,11 +711,9 @@ void SystemClock_Config(void)
 /* USER CODE END 4 */
 
 /**
- * @brief  This function is executed in case of error occurrence.
- * @note   Disables interrupts and enters infinite loop
- *         User can add debug output or LED indication here
- * @retval None
- */
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -816,14 +728,12 @@ void Error_Handler(void)
 
 #ifdef  USE_FULL_ASSERT
 /**
- * @brief  Reports the name of the source file and the source line number
- *         where the assert_param error has occurred.
- * @param  file: pointer to the source file name
- * @param  line: assert_param error line source number
- * @note   This function is called when wrong parameters are passed to HAL functions
- *         Only active when USE_FULL_ASSERT is defined
- * @retval None
- */
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
 void assert_failed(uint8_t *file, uint32_t line)
 {
   /* USER CODE BEGIN 6 */
